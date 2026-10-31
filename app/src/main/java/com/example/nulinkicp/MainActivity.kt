@@ -94,6 +94,9 @@ class MainActivity : Activity() {
                 override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
                 override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: android.view.View?, position: Int, id: Long) {
                     selectedHexImage?.let { showHexValidation(it, selectedHexName) }
+                    if (::detectButton.isInitialized) {
+                        detectButton.text = if (position == 1) "RUN MS51PC0AE DETECTION DIAGNOSTIC" else "DETECTION NOT AVAILABLE FOR MS51FB9AE"
+                    }
                 }
             }
         }
@@ -113,11 +116,28 @@ class MainActivity : Activity() {
             setOnClickListener { pickHex() }
         })
         detectButton = Button(this).apply {
-            text = "AUTO DETECT MCU (MS51PC0AE)"
+            text = "RUN MS51PC0AE DETECTION DIAGNOSTIC"
             isEnabled = false
             setOnClickListener { runCapturedAutoDetect() }
         }
         root.addView(detectButton)
+        root.addView(Button(this).apply {
+            text = "BUILD APROM TRANSFER MANIFEST"
+            setOnClickListener {
+                val image = selectedHexImage
+                if (image == null) {
+                    Toast.makeText(this@MainActivity, "Select a valid HEX file first.", Toast.LENGTH_SHORT).show()
+                } else if (image.maxAddress >= selectedTargetCapacity()) {
+                    Toast.makeText(this@MainActivity, "HEX exceeds selected APROM capacity.", Toast.LENGTH_LONG).show()
+                } else {
+                    val manifest = buildTransferManifest(image)
+                    val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    clipboard.setPrimaryClip(ClipData.newPlainText("Nu-Link APROM transfer manifest", manifest))
+                    log("APROM manifest generated locally; no USB programming packets were sent.")
+                    Toast.makeText(this@MainActivity, "Manifest copied to clipboard.", Toast.LENGTH_SHORT).show()
+                }
+            }
+        })
         root.addView(Button(this).apply {
             text = "COPY FULL DIAGNOSTIC REPORT"
             setOnClickListener {
@@ -254,6 +274,11 @@ class MainActivity : Activity() {
         val conn = connection
         val epOut = bulkOutEndpoint
         val epIn = bulkInEndpoint
+        if (targetSpinner.selectedItemPosition != 1) {
+            log("AUTO DETECT diagnostic is currently captured only for MS51PC0AE. No command sent.")
+            Toast.makeText(this, "Detection reference is available for MS51PC0AE only.", Toast.LENGTH_LONG).show()
+            return
+        }
         if (conn == null || epOut == null || epIn == null) {
             log("AUTO DETECT: connect the programmer first.")
             return
@@ -416,6 +441,39 @@ class MainActivity : Activity() {
             append(if (fits) "Address capacity: PASS" else "Address capacity: FAIL — HEX exceeds APROM")
         }
         log("HEX target check for ${selectedTargetName()}: ${if (fits) "PASS" else "FAIL"}.")
+    }
+
+    private fun buildTransferManifest(image: HexImage): String {
+        val entries = image.bytes.toSortedMap().entries.toList()
+        val ranges = ArrayList<Pair<Long, Long>>()
+        var start = entries.first().key
+        var previous = start
+        for (i in 1 until entries.size) {
+            val address = entries[i].key
+            if (address != previous + 1L) {
+                ranges.add(start to previous)
+                start = address
+            }
+            previous = address
+        }
+        ranges.add(start to previous)
+        val blocks = (image.bytes.size + 31) / 32
+        return buildString {
+            appendLine("NU-LINK APROM TRANSFER MANIFEST — LOCAL ANALYSIS ONLY")
+            appendLine("Target: ${selectedTargetName()}")
+            appendLine("HEX file: $selectedHexName")
+            appendLine("Data bytes: ${image.bytes.size}")
+            appendLine("Data records: ${image.dataRecords}")
+            appendLine("Address range: 0x${image.minAddress.toString(16).uppercase(Locale.US)}..0x${image.maxAddress.toString(16).uppercase(Locale.US)}")
+            appendLine("32-byte data chunks (packed by populated bytes, not protocol packets): $blocks")
+            appendLine("Contiguous address ranges: ${ranges.size}")
+            ranges.forEachIndexed { index, range ->
+                appendLine("${index + 1}. 0x${range.first.toString(16).uppercase(Locale.US)}..0x${range.second.toString(16).uppercase(Locale.US)} (${range.second - range.first + 1} bytes)")
+            }
+            appendLine()
+            appendLine("SAFETY: This manifest does not encode Nu-Link USB commands and does not send data to the programmer.")
+            appendLine("APROM erase/program/verify remains disabled until the command framing and acknowledgements are validated.")
+        }
     }
 
     private fun queryDisplayName(uri: Uri): String? {

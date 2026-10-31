@@ -11,8 +11,8 @@ android {
         applicationId = "com.example.nulinkicp"
         minSdk = 26
         targetSdk = 35
-        versionCode = 7
-        versionName = "0.7-hex-validation"
+        versionCode = 8
+        versionName = "0.8-protocol-research"
     }
 
     // Keep Java and Kotlin bytecode targets aligned.

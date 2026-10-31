@@ -1,10 +1,12 @@
-MILESTONE 7 — UPLOAD TO GITHUB
+MILESTONE 8 — GITHUB BUILD
 
-1. Extract NuLinkAndroid_Milestone7_HEX_Validation.zip.
-2. Upload the CONTENTS of the extracted folder into the root of your existing GitHub repository.
-3. Include the hidden .github/workflows/android.yml folder/file.
-4. Commit changes. app/build.gradle.kts is versionCode 7 / versionName 0.7-hex-validation.
-5. Open Actions -> Build Nu-Link Android APK.
-6. Download the NuLink-Android-debug-APK artifact.
+1. Extract NuLinkAndroid_Milestone8_Protocol_Research.zip.
+2. Open the extracted folder.
+3. Upload its CONTENTS to the root of your existing GitHub repository.
+4. Make sure the hidden .github/workflows/android.yml folder is included.
+5. Commit the files.
+6. Open GitHub -> Actions -> Build Nu-Link Android APK.
+7. Download the NuLink-Android-debug-APK artifact.
 
-This milestone validates Intel HEX files and target APROM address ranges. It does NOT send flash erase/program/verify commands.
+This is a source package, not a precompiled APK.
+APROM erase/program/verify are still disabled pending safe protocol validation.
