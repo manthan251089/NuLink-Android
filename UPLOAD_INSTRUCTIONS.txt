@@ -1,11 +1,10 @@
-MILESTONE 6 / VERSION 0.6 UPLOAD
+MILESTONE 7 — UPLOAD TO GITHUB
 
-1. Extract NuLinkAndroid_Milestone6_FullDiagnostics.zip.
-2. Open the extracted NuLinkAndroid_Milestone6_FullDiagnostics folder.
-3. Upload ALL CONTENTS (not the outer folder) to the root of your existing GitHub repository.
-4. Include the hidden .github folder and its workflows/android.yml file.
-5. Commit with message: Add Nu-Link full response diagnostics v0.6
-6. Open Actions and run Build Nu-Link Android APK.
-7. Download NuLink-Android-debug-APK from the successful workflow run.
+1. Extract NuLinkAndroid_Milestone7_HEX_Validation.zip.
+2. Upload the CONTENTS of the extracted folder into the root of your existing GitHub repository.
+3. Include the hidden .github/workflows/android.yml folder/file.
+4. Commit changes. app/build.gradle.kts is versionCode 7 / versionName 0.7-hex-validation.
+5. Open Actions -> Build Nu-Link Android APK.
+6. Download the NuLink-Android-debug-APK artifact.
 
-VersionCode is 6 and versionName is 0.6-full-response-diagnostics, so this source differs from v0.5.
+This milestone validates Intel HEX files and target APROM address ranges. It does NOT send flash erase/program/verify commands.

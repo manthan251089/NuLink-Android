@@ -15,6 +15,10 @@ class MainActivity : Activity() {
     private lateinit var logView: TextView
     private lateinit var statusView: TextView
     private lateinit var mcuView: TextView
+    private lateinit var targetSpinner: Spinner
+    private lateinit var hexView: TextView
+    private var selectedHexImage: HexImage? = null
+    private var selectedHexName: String = ""
     private var connection: UsbDeviceConnection? = null
     private var claimedInterface: UsbInterface? = null
     private var selectedHex: Uri? = null
@@ -77,6 +81,29 @@ class MainActivity : Activity() {
         }
         root.addView(statusView)
         root.addView(mcuView)
+        root.addView(TextView(this).apply {
+            text = "TARGET MCU"
+            textSize = 13f
+            setPadding(0, 8, 0, 2)
+        })
+        targetSpinner = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item,
+                listOf("MS51FB9AE — 16 KB APROM", "MS51PC0AE — 32 KB APROM"))
+            setSelection(1)
+            onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+                override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+                override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: android.view.View?, position: Int, id: Long) {
+                    selectedHexImage?.let { showHexValidation(it, selectedHexName) }
+                }
+            }
+        }
+        root.addView(targetSpinner)
+        hexView = TextView(this).apply {
+            text = "HEX: no file selected"
+            textSize = 14f
+            setPadding(0, 8, 0, 12)
+        }
+        root.addView(hexView)
         root.addView(Button(this).apply {
             text = "DETECT PROGRAMMER"
             setOnClickListener { findNuLink() }
@@ -104,11 +131,11 @@ class MainActivity : Activity() {
             }
         })
         root.addView(Button(this).apply {
-            text = "ONLINE PROGRAM (not enabled)"
+            text = "ONLINE PROGRAM (protocol not validated)"
             isEnabled = false
         })
         root.addView(Button(this).apply {
-            text = "OFFLINE TRANSFER (not enabled)"
+            text = "OFFLINE TRANSFER (protocol not validated)"
             isEnabled = false
         })
         val scroll = ScrollView(this)
@@ -358,13 +385,45 @@ class MainActivity : Activity() {
         try {
             val content = contentResolver.openInputStream(uri)?.use { it.readBytes() }
                 ?: error("Cannot open selected file")
-            val summary = IntelHex.parse(content.toString(Charsets.US_ASCII))
-            log("HEX VALID: ${summary.bytes} data bytes, ${summary.records} data records.")
-            log("Address range: 0x${summary.minAddress.toString(16).uppercase(Locale.US)} .. 0x${summary.maxAddress.toString(16).uppercase(Locale.US)}")
-            log("HEX validation only; no programming command sent.")
+            val name = queryDisplayName(uri) ?: "Selected Intel HEX"
+            val image = IntelHex.parse(content.toString(Charsets.US_ASCII))
+            selectedHexImage = image
+            selectedHexName = name
+            showHexValidation(image, name)
+            log("HEX VALID: ${image.bytes.size} data bytes, ${image.dataRecords} data records.")
+            log("Address range: 0x${image.minAddress.toString(16).uppercase(Locale.US)} .. 0x${image.maxAddress.toString(16).uppercase(Locale.US)}")
+            log("Target capacity check: ${if (image.maxAddress < selectedTargetCapacity()) "PASS" else "FAIL"}.")
+            log("HEX parsed and validated locally; no programming command sent.")
         } catch (e: Exception) {
+            selectedHexImage = null
+            hexView.text = "HEX INVALID: ${e.message ?: e.javaClass.simpleName}"
             log("HEX ERROR: ${e.message ?: e.javaClass.simpleName}")
         }
+    }
+
+    private fun selectedTargetName(): String = if (targetSpinner.selectedItemPosition == 0) "MS51FB9AE" else "MS51PC0AE"
+
+    private fun selectedTargetCapacity(): Long = if (targetSpinner.selectedItemPosition == 0) 16L * 1024L else 32L * 1024L
+
+    private fun showHexValidation(image: HexImage, name: String) {
+        val capacity = selectedTargetCapacity()
+        val fits = image.maxAddress < capacity
+        hexView.text = buildString {
+            append("HEX: $name\n")
+            append("Data: ${image.bytes.size} bytes | Records: ${image.dataRecords}\n")
+            append("Range: 0x${image.minAddress.toString(16).uppercase(Locale.US)}–0x${image.maxAddress.toString(16).uppercase(Locale.US)}\n")
+            append("Target: ${selectedTargetName()} (${capacity / 1024} KB APROM)\n")
+            append(if (fits) "Address capacity: PASS" else "Address capacity: FAIL — HEX exceeds APROM")
+        }
+        log("HEX target check for ${selectedTargetName()}: ${if (fits) "PASS" else "FAIL"}.")
+    }
+
+    private fun queryDisplayName(uri: Uri): String? {
+        return try {
+            contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) cursor.getString(0) else null
+            }
+        } catch (_: Exception) { null }
     }
 
     private fun closeUsb() {
@@ -404,49 +463,72 @@ class MainActivity : Activity() {
     }
 }
 
-data class HexSummary(val bytes: Int, val records: Int, val minAddress: Long, val maxAddress: Long)
+data class HexImage(
+    val bytes: Map<Long, Int>,
+    val dataRecords: Int,
+    val minAddress: Long,
+    val maxAddress: Long,
+    val startAddress: Long?
+)
 
 object IntelHex {
-    fun parse(text: String): HexSummary {
+    fun parse(text: String): HexImage {
+        val memory = sortedMapOf<Long, Int>()
         var upper = 0L
-        var count = 0
-        var records = 0
-        var min = Long.MAX_VALUE
-        var max = 0L
-        var eof = false
-        text.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.forEach { line ->
-            require(line.startsWith(":")) { "Invalid Intel HEX record" }
+        var dataRecords = 0
+        var eofSeen = false
+        var startAddress: Long? = null
+        val lines = text.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }
+        lines.forEachIndexed { index, line ->
+            require(!eofSeen) { "Data found after EOF record (line ${index + 1})" }
+            require(line.startsWith(":")) { "Line ${index + 1}: record must start with ':'" }
             val raw = line.substring(1)
-            require(raw.length % 2 == 0) { "Odd number of HEX characters" }
-            val b = raw.chunked(2).map { it.toInt(16) }
-            require(b.size >= 5) { "Record too short" }
-            val len = b[0]
-            require(b.size == len + 5) { "Record length mismatch" }
-            require((b.sum() and 0xFF) == 0) { "Checksum error" }
-            val addr = (b[1] shl 8) or b[2]
-            when (b[3]) {
-                0x00 -> if (len > 0) {
-                    val absolute = upper + addr
-                    min = minOf(min, absolute)
-                    max = maxOf(max, absolute + len - 1)
-                    count += len
-                    records++
+            require(raw.length >= 10 && raw.length % 2 == 0) { "Line ${index + 1}: invalid record length" }
+            val record = try { raw.chunked(2).map { it.toInt(16) } }
+                catch (_: NumberFormatException) { error("Line ${index + 1}: non-hexadecimal character") }
+            val length = record[0]
+            require(record.size == length + 5) { "Line ${index + 1}: byte count mismatch" }
+            require((record.sum() and 0xFF) == 0) { "Line ${index + 1}: checksum error" }
+            val address = (record[1] shl 8) or record[2]
+            val type = record[3]
+            when (type) {
+                0x00 -> {
+                    val absolute = upper + address
+                    require(absolute + length <= 0x1_0000_0000L) { "Line ${index + 1}: address overflow" }
+                    for (i in 0 until length) {
+                        val at = absolute + i
+                        val value = record[4 + i]
+                        val previous = memory[at]
+                        require(previous == null || previous == value) { "Line ${index + 1}: conflicting overlapping data at 0x${at.toString(16)}" }
+                        memory[at] = value
+                    }
+                    if (length > 0) dataRecords++
                 }
-                0x01 -> eof = true
+                0x01 -> {
+                    require(length == 0 && address == 0) { "Line ${index + 1}: malformed EOF record" }
+                    eofSeen = true
+                }
                 0x02 -> {
-                    require(len == 2) { "Invalid extended segment address record" }
-                    upper = (((b[4] shl 8) or b[5]).toLong() shl 4)
+                    require(length == 2) { "Line ${index + 1}: invalid extended segment address" }
+                    upper = (((record[4] shl 8) or record[5]).toLong() shl 4)
                 }
                 0x04 -> {
-                    require(len == 2) { "Invalid extended linear address record" }
-                    upper = (((b[4] shl 8) or b[5]).toLong() shl 16)
+                    require(length == 2) { "Line ${index + 1}: invalid extended linear address" }
+                    upper = (((record[4] shl 8) or record[5]).toLong() shl 16)
                 }
-                0x03, 0x05 -> Unit
-                else -> error("Unsupported Intel HEX record type ${b[3]}")
+                0x03 -> {
+                    require(length == 4) { "Line ${index + 1}: invalid start segment address" }
+                    startAddress = (((record[4] shl 8) or record[5]).toLong() shl 4) + ((record[6] shl 8) or record[7])
+                }
+                0x05 -> {
+                    require(length == 4) { "Line ${index + 1}: invalid start linear address" }
+                    startAddress = ((record[4].toLong() shl 24) or (record[5].toLong() shl 16) or (record[6].toLong() shl 8) or record[7].toLong())
+                }
+                else -> error("Line ${index + 1}: unsupported record type 0x${type.toString(16)}")
             }
         }
-        require(eof) { "Missing EOF record" }
-        require(count > 0) { "HEX contains no data records" }
-        return HexSummary(count, records, min, max)
+        require(eofSeen) { "Missing EOF record" }
+        require(memory.isNotEmpty()) { "HEX contains no data records" }
+        return HexImage(memory, dataRecords, memory.firstKey(), memory.lastKey(), startAddress)
     }
 }
