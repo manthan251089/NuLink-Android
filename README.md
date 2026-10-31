@@ -1,18 +1,26 @@
-# Nu-Link Android — Milestone 2 (USB diagnostics)
+# Nu-Link Android — Milestone 3: Captured Auto Detect test
 
 This project builds a debug APK through GitHub Actions.
 
-## Included
-- USB OTG detection for VID `0416`, PID `511C`
-- Android USB permission handling
-- USB interface and endpoint descriptor display
-- Claim/release of interface 1 and confirmation of bulk endpoints `0x83 IN` and `0x04 OUT`
-- Intel HEX parsing and checksum validation
-- Java/Kotlin JVM target aligned to Java 17
-- GitHub Actions workflow to build `app-debug.apk`
+## What this build does
+- Detects the user's Nu-Link clone (`VID 0416`, `PID 511C`).
+- Requests Android USB permission and claims interface 1.
+- Verifies bulk IN `0x83` and OUT `0x04`.
+- Adds an **AUTO DETECT MCU (MS51PC0AE)** action.
+- Replays the 435 OUT bulk frames extracted from the user's Windows capture `NuLink_MS51PC0AE_Detect_Only.pcapng`.
+- Reads one 64-byte IN response for each OUT transaction and compares it with the matching response in that capture.
+- Reports `MS51PC0AE — capture reference matched` only if every response exactly matches the captured Windows reference. Otherwise it reports that the MCU is not confirmed.
 
-## Not yet implemented
-This build does **not** send Nu-Link protocol commands and does not identify the attached MCU. MCU identification, erase, programming, verify, and offline transfer remain disabled until the protocol commands and response framing are independently validated from the Windows ICP captures.
+## Important limitation
+This is a controlled, capture-derived Auto Detect replay for the MS51PC0AE test case. It is not yet a general implementation of the Nu-Link protocol and does not support MS51FB9AE detection in this build. The packet sequence was extracted from the capture that the user confirmed was made in Auto Detection mode only. It does not include erase, flash write, configuration-bit, or lock-bit operations. Do not use this APK as a production programmer.
 
-## Build
-Push this project to GitHub (including `.github/workflows/android.yml`), then open **Actions**, run **Build Nu-Link Android APK**, and download the `NuLink-Android-debug-APK` artifact. Extract `app-debug.apk` from the downloaded ZIP.
+Exact matching is intentionally strict. Firmware/response variations may cause a false negative; in that case the app reports "MCU not confirmed" rather than guessing.
+
+## Build with GitHub Actions
+1. Upload the full extracted project to the GitHub repository, including `.github/workflows/android.yml`.
+2. Open **Actions** and run the workflow.
+3. Download `NuLink-Android-debug-APK` from the workflow artifacts.
+4. Extract and install `app-debug.apk`.
+
+## Protocol evidence
+The embedded binary assets contain 435 paired 64-byte bulk OUT/IN frames from the supplied MS51PC0AE detect-only capture. The final OUT record was excluded because no corresponding IN response was present in the capture.

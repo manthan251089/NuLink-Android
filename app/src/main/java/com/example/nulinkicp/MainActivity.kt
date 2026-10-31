@@ -18,6 +18,10 @@ class MainActivity : Activity() {
     private var connection: UsbDeviceConnection? = null
     private var claimedInterface: UsbInterface? = null
     private var selectedHex: Uri? = null
+    private var bulkInEndpoint: UsbEndpoint? = null
+    private var bulkOutEndpoint: UsbEndpoint? = null
+    @Volatile private var detectRunning = false
+    private lateinit var detectButton: Button
     private val permissionAction = "com.example.nulinkicp.USB_PERMISSION"
 
     private val permissionReceiver = object : BroadcastReceiver() {
@@ -80,10 +84,12 @@ class MainActivity : Activity() {
             text = "SELECT INTEL HEX"
             setOnClickListener { pickHex() }
         })
-        root.addView(Button(this).apply {
-            text = "IDENTIFY MCU (protocol pending)"
+        detectButton = Button(this).apply {
+            text = "AUTO DETECT MCU (MS51PC0AE)"
             isEnabled = false
-        })
+            setOnClickListener { runCapturedAutoDetect() }
+        }
+        root.addView(detectButton)
         root.addView(Button(this).apply {
             text = "ONLINE PROGRAM (not enabled)"
             isEnabled = false
@@ -187,12 +193,93 @@ class MainActivity : Activity() {
         }
         connection = conn
         claimedInterface = intf
+        bulkInEndpoint = input
+        bulkOutEndpoint = output
+        detectButton.isEnabled = true
         statusView.text = "Programmer: CONNECTED"
         mcuView.text = "MCU: not identified — no ICP command sent"
         log("USB interface 1 successfully claimed.")
         log("Bulk IN=${hex2(input.address)}, OUT=${hex2(output.address)}, maxPacket=${input.maxPacketSize}.")
         log("Transport check only. No USB OUT command has been transmitted.")
         log("MCU identification is intentionally not enabled until command framing is validated.")
+    }
+
+
+    /*
+     * Capture-derived replay of the user's Windows ICP Auto Detect session
+     * for MS51PC0AE. This is a narrowly scoped reference test, not a general
+     * Nu-Link protocol implementation.
+     */
+    private fun runCapturedAutoDetect() {
+        val conn = connection
+        val epOut = bulkOutEndpoint
+        val epIn = bulkInEndpoint
+        if (conn == null || epOut == null || epIn == null) {
+            log("AUTO DETECT: connect the programmer first.")
+            return
+        }
+        if (detectRunning) return
+        detectRunning = true
+        detectButton.isEnabled = false
+        mcuView.text = "MCU: identification in progress"
+        statusView.text = "Programmer: running captured Auto Detect"
+        Thread {
+            try {
+                val txBytes = assets.open("ms51pc0ae_detect_out.bin").use { it.readBytes() }
+                val refBytes = assets.open("ms51pc0ae_detect_in_reference.bin").use { it.readBytes() }
+                require(txBytes.size % 64 == 0 && refBytes.size % 64 == 0) {
+                    "Invalid bundled capture data"
+                }
+                val txCount = txBytes.size / 64
+                val refCount = refBytes.size / 64
+                require(txCount == refCount && txCount > 0) {
+                    "Request/response reference count mismatch"
+                }
+                var exactMatches = 0
+                var sequenceMatches = 0
+                var firstMismatch = -1
+                for (i in 0 until txCount) {
+                    val tx = txBytes.copyOfRange(i * 64, (i + 1) * 64)
+                    val expected = refBytes.copyOfRange(i * 64, (i + 1) * 64)
+                    val sent = conn.bulkTransfer(epOut, tx, 64, 2000)
+                    if (sent != 64) error("USB OUT failed at transaction ${i + 1}: $sent bytes")
+                    val rx = ByteArray(64)
+                    val received = conn.bulkTransfer(epIn, rx, 64, 2500)
+                    if (received != 64) error("USB IN timeout/short response at transaction ${i + 1}: $received bytes")
+                    if (rx[0] == expected[0]) sequenceMatches++
+                    if (rx.contentEquals(expected)) exactMatches++
+                    else if (firstMismatch < 0) firstMismatch = i
+                    if (i % 25 == 0 || i == txCount - 1) {
+                        val done = i + 1
+                        runOnUiThread { statusView.text = "Auto Detect: $done / $txCount transactions" }
+                    }
+                }
+                runOnUiThread {
+                    if (exactMatches == txCount) {
+                        mcuView.text = "MCU: MS51PC0AE — capture reference matched"
+                        statusView.text = "Auto Detect exchange completed"
+                        log("AUTO DETECT: all $txCount responses exactly match the Windows MS51PC0AE reference.")
+                        log("Result: MS51PC0AE (capture-reference match).")
+                    } else {
+                        mcuView.text = "MCU: not confirmed"
+                        statusView.text = "Auto Detect completed; response differs"
+                        log("AUTO DETECT: $exactMatches / $txCount exact response matches; $sequenceMatches sequence-byte matches.")
+                        log("First differing response: transaction ${firstMismatch + 1}.")
+                        log("MCU was NOT identified because the response did not fully match the MS51PC0AE reference.")
+                    }
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    mcuView.text = "MCU: not identified"
+                    statusView.text = "Auto Detect failed"
+                    log("AUTO DETECT ERROR: ${e.javaClass.simpleName}: ${e.message}")
+                    log("No erase or flash-program command is implemented in this build.")
+                }
+            } finally {
+                detectRunning = false
+                runOnUiThread { detectButton.isEnabled = connection != null }
+            }
+        }.start()
     }
 
     private fun pickHex() {
@@ -230,6 +317,9 @@ class MainActivity : Activity() {
         try { connection?.close() } catch (_: Exception) {}
         claimedInterface = null
         connection = null
+        bulkInEndpoint = null
+        bulkOutEndpoint = null
+        if (::detectButton.isInitialized) detectButton.isEnabled = false
     }
 
     private fun log(message: String) {
