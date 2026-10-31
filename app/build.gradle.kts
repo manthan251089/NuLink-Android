@@ -11,8 +11,8 @@ android {
         applicationId = "com.example.nulinkicp"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1-protocol-research"
+        versionCode = 2
+        versionName = "0.2-usb-diagnostics"
     }
 
     // Keep Java and Kotlin bytecode targets aligned.

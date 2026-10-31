@@ -5,43 +5,48 @@ import android.app.PendingIntent
 import android.content.*
 import android.hardware.usb.*
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.widget.*
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
+import java.util.Locale
 
 class MainActivity : Activity() {
     private lateinit var usbManager: UsbManager
     private lateinit var logView: TextView
     private lateinit var statusView: TextView
-    private var selectedHex: Uri? = null
+    private lateinit var mcuView: TextView
     private var connection: UsbDeviceConnection? = null
-    private var bulkInterface: UsbInterface? = null
-    private var bulkIn: UsbEndpoint? = null
-    private var bulkOut: UsbEndpoint? = null
-
+    private var claimedInterface: UsbInterface? = null
+    private var selectedHex: Uri? = null
     private val permissionAction = "com.example.nulinkicp.USB_PERMISSION"
+
     private val permissionReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            if (intent.action == permissionAction) {
-                val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
-                if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false) && device != null) {
-                    inspectAndOpen(device)
-                } else log("USB permission denied.")
+            if (intent.action != permissionAction) return
+            val device = usbDeviceExtra(intent)
+            if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false) && device != null) {
+                inspectAndOpen(device)
+            } else {
+                statusView.text = "Programmer: USB permission denied"
+                log("USB permission was denied by Android.")
             }
         }
     }
+
+    @Suppress("DEPRECATION")
+    private fun usbDeviceExtra(intent: Intent): UsbDevice? =
+        if (Build.VERSION.SDK_INT >= 33) intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+        else intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         usbManager = getSystemService(USB_SERVICE) as UsbManager
         buildUi()
-        val permissionFilter = IntentFilter(permissionAction)
-        if (android.os.Build.VERSION.SDK_INT >= 33) {
-            registerReceiver(permissionReceiver, permissionFilter, RECEIVER_NOT_EXPORTED)
-        } else {
+        val filter = IntentFilter(permissionAction)
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(permissionReceiver, filter, RECEIVER_NOT_EXPORTED)
+        else {
             @Suppress("DEPRECATION")
-            registerReceiver(permissionReceiver, permissionFilter)
+            registerReceiver(permissionReceiver, filter)
         }
         findNuLink()
     }
@@ -49,24 +54,51 @@ class MainActivity : Activity() {
     private fun buildUi() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(28, 28, 28, 28)
+            setPadding(24, 24, 24, 24)
         }
-        val title = TextView(this).apply { text = "Nu-Link ICP Programmer"; textSize = 24f }
-        statusView = TextView(this).apply { text = "USB: searching"; textSize = 16f }
-        val connect = Button(this).apply { text = "Detect / Connect Nu-Link"; setOnClickListener { findNuLink() } }
-        val browse = Button(this).apply { text = "Select Intel HEX"; setOnClickListener { pickHex() } }
-        val online = Button(this).apply {
-            text = "Online programming (not enabled yet)"
+        root.addView(TextView(this).apply {
+            text = "Nu-Link ICP Programmer"
+            textSize = 24f
+        })
+        statusView = TextView(this).apply {
+            text = "Programmer: searching"
+            textSize = 17f
+            setPadding(0, 12, 0, 4)
+        }
+        mcuView = TextView(this).apply {
+            text = "MCU: not identified yet"
+            textSize = 16f
+            setPadding(0, 4, 0, 12)
+        }
+        root.addView(statusView)
+        root.addView(mcuView)
+        root.addView(Button(this).apply {
+            text = "DETECT PROGRAMMER"
+            setOnClickListener { findNuLink() }
+        })
+        root.addView(Button(this).apply {
+            text = "SELECT INTEL HEX"
+            setOnClickListener { pickHex() }
+        })
+        root.addView(Button(this).apply {
+            text = "IDENTIFY MCU (protocol pending)"
             isEnabled = false
-        }
-        val offline = Button(this).apply {
-            text = "Offline transfer (not enabled yet)"
+        })
+        root.addView(Button(this).apply {
+            text = "ONLINE PROGRAM (not enabled)"
             isEnabled = false
+        })
+        root.addView(Button(this).apply {
+            text = "OFFLINE TRANSFER (not enabled)"
+            isEnabled = false
+        })
+        val scroll = ScrollView(this)
+        logView = TextView(this).apply {
+            textSize = 13f
+            setTextIsSelectable(true)
+            setPadding(0, 12, 0, 0)
         }
-        logView = TextView(this).apply { textSize = 13f; setTextIsSelectable(true) }
-        val scroll = ScrollView(this).apply { addView(logView) }
-        root.addView(title); root.addView(statusView); root.addView(connect); root.addView(browse)
-        root.addView(online); root.addView(offline)
+        scroll.addView(logView)
         root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
         setContentView(root)
     }
@@ -76,146 +108,196 @@ class MainActivity : Activity() {
             it.vendorId == NUVOTON_VID && it.productId == NUVOTON_PID
         }
         if (device == null) {
-            statusView.text = "USB: Nu-Link not found"
-            log("Connect the Nu-Link clone using a USB OTG adapter.")
+            statusView.text = "Programmer: not found"
+            mcuView.text = "MCU: not identified"
+            log("No USB device with VID=0416 PID=511C found.")
+            log("Connect the Nu-Link clone through USB-OTG, then tap DETECT PROGRAMMER.")
+            closeUsb()
             return
         }
-        log("Found ${device.deviceName}, VID=${device.vendorId.toString(16)}, PID=${device.productId.toString(16)}")
-        if (usbManager.hasPermission(device)) inspectAndOpen(device) else {
-            // Android 14+ rejects a mutable PendingIntent with an implicit Intent.
-            // Scope the broadcast to this app package so USB permission can be delivered.
-            val permissionIntent = Intent(permissionAction).setPackage(packageName)
-            val pi = PendingIntent.getBroadcast(
-                this,
-                0,
-                permissionIntent,
-                PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-            )
+        log("Found ${device.deviceName}, VID=${hex4(device.vendorId)}, PID=${hex4(device.productId)}")
+        log("USB device: ${device.manufacturerName ?: "manufacturer unavailable"} / ${device.productName ?: "product unavailable"}")
+        log("Device version: ${device.version}; interfaces=${device.interfaceCount}")
+        dumpInterfaces(device)
+        if (usbManager.hasPermission(device)) {
+            inspectAndOpen(device)
+        } else {
             try {
+                val piIntent = Intent(permissionAction).setPackage(packageName)
+                val flags = PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+                val pi = PendingIntent.getBroadcast(this, 0, piIntent, flags)
                 usbManager.requestPermission(device, pi)
-                statusView.text = "USB: waiting for permission"
+                statusView.text = "Programmer: waiting for USB permission"
                 log("Requested Android USB permission.")
             } catch (e: Exception) {
-                statusView.text = "USB: permission request failed"
-                log("USB permission error: ${e.javaClass.simpleName}: ${e.message}")
+                statusView.text = "Programmer: permission request failed"
+                log("Permission request error: ${e.javaClass.simpleName}: ${e.message}")
+            }
+        }
+    }
+
+    private fun dumpInterfaces(device: UsbDevice) {
+        for (i in 0 until device.interfaceCount) {
+            val intf = device.getInterface(i)
+            log("Interface ${intf.id}: class=${hex2(intf.interfaceClass)}, subclass=${hex2(intf.interfaceSubclass)}, protocol=${hex2(intf.interfaceProtocol)}, endpoints=${intf.endpointCount}")
+            for (j in 0 until intf.endpointCount) {
+                val ep = intf.getEndpoint(j)
+                val dir = if (ep.direction == UsbConstants.USB_DIR_IN) "IN" else "OUT"
+                val type = when (ep.type) {
+                    UsbConstants.USB_ENDPOINT_XFER_BULK -> "BULK"
+                    UsbConstants.USB_ENDPOINT_XFER_INT -> "INTERRUPT"
+                    UsbConstants.USB_ENDPOINT_XFER_CONTROL -> "CONTROL"
+                    UsbConstants.USB_ENDPOINT_XFER_ISOC -> "ISO"
+                    else -> "UNKNOWN"
+                }
+                log("  EP ${hex2(ep.address)} $dir $type maxPacket=${ep.maxPacketSize}")
             }
         }
     }
 
     private fun inspectAndOpen(device: UsbDevice) {
-        // Descriptors from user's USBTreeView capture: interface 0 HID, interface 1 CDC-Data.
         val intf = (0 until device.interfaceCount).map { device.getInterface(it) }
             .firstOrNull { it.id == BULK_INTERFACE_NUMBER }
         if (intf == null) {
-            log("Expected interface 1 was not exposed by Android. Interfaces=${device.interfaceCount}")
+            statusView.text = "Programmer found; interface 1 missing"
+            log("Expected bulk interface 1 is not available.")
             return
         }
         val input = (0 until intf.endpointCount).map { intf.getEndpoint(it) }
-            .firstOrNull { it.address == BULK_IN_ADDRESS && it.direction == UsbConstants.USB_DIR_IN }
+            .firstOrNull { it.address == BULK_IN_ADDRESS && it.direction == UsbConstants.USB_DIR_IN && it.type == UsbConstants.USB_ENDPOINT_XFER_BULK }
         val output = (0 until intf.endpointCount).map { intf.getEndpoint(it) }
-            .firstOrNull { it.address == BULK_OUT_ADDRESS && it.direction == UsbConstants.USB_DIR_OUT }
+            .firstOrNull { it.address == BULK_OUT_ADDRESS && it.direction == UsbConstants.USB_DIR_OUT && it.type == UsbConstants.USB_ENDPOINT_XFER_BULK }
         if (input == null || output == null) {
-            log("Bulk endpoints 0x83/0x04 not found on interface 1.")
+            statusView.text = "Programmer found; bulk endpoints missing"
+            log("Required bulk endpoints 0x83 IN and 0x04 OUT were not found.")
             return
         }
+        closeUsb()
         val conn = usbManager.openDevice(device)
-        if (conn == null || !conn.claimInterface(intf, true)) {
-            log("Could not open/claim interface 1. Close Windows ICP before connecting.")
+        if (conn == null) {
+            statusView.text = "Programmer found; open failed"
+            log("UsbManager.openDevice returned null.")
             return
         }
-        connection?.close()
+        if (!conn.claimInterface(intf, true)) {
+            conn.close()
+            statusView.text = "Programmer found; claim failed"
+            log("Could not claim interface 1. Close Windows ICP or other apps using the programmer.")
+            return
+        }
         connection = conn
-        bulkInterface = intf
-        bulkIn = input
-        bulkOut = output
-        statusView.text = "USB: connected (protocol not initialized)"
-        log("Claimed interface 1; IN=0x83 BULK, OUT=0x04 BULK, max packet=${input.maxPacketSize}.")
-        log("No Nu-Link command has been sent. Protocol implementation awaits validated command framing.")
+        claimedInterface = intf
+        statusView.text = "Programmer: CONNECTED"
+        mcuView.text = "MCU: not identified — no ICP command sent"
+        log("USB interface 1 successfully claimed.")
+        log("Bulk IN=${hex2(input.address)}, OUT=${hex2(output.address)}, maxPacket=${input.maxPacketSize}.")
+        log("Transport check only. No USB OUT command has been transmitted.")
+        log("MCU identification is intentionally not enabled until command framing is validated.")
     }
 
     private fun pickHex() {
-        val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "*/*"
             putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/octet-stream", "text/plain", "application/hex"))
         }
-        startActivityForResult(i, REQUEST_HEX)
+        startActivityForResult(intent, REQUEST_HEX)
     }
 
     @Deprecated("Use Activity Result APIs in production")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == REQUEST_HEX && resultCode == RESULT_OK) {
-            selectedHex = data?.data
-            selectedHex?.let { uri ->
-                contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                try {
-                    val bytes = contentResolver.openInputStream(uri)!!.use { it.readBytes() }
-                    val parsed = IntelHex.parse(bytes.toString(Charsets.US_ASCII))
-                    log("HEX loaded: ${parsed.size} data bytes across ${parsed.records} data records.")
-                    log("Address range: 0x${parsed.minAddress.toString(16)}..0x${parsed.maxAddress.toString(16)}")
-                } catch (e: Exception) {
-                    log("HEX error: ${e.message}")
-                }
-            }
+        if (requestCode != REQUEST_HEX || resultCode != RESULT_OK) return
+        val uri = data?.data ?: return
+        selectedHex = uri
+        try {
+            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        } catch (_: Exception) {}
+        try {
+            val content = contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                ?: error("Cannot open selected file")
+            val summary = IntelHex.parse(content.toString(Charsets.US_ASCII))
+            log("HEX VALID: ${summary.bytes} data bytes, ${summary.records} data records.")
+            log("Address range: 0x${summary.minAddress.toString(16).uppercase(Locale.US)} .. 0x${summary.maxAddress.toString(16).uppercase(Locale.US)}")
+            log("HEX validation only; no programming command sent.")
+        } catch (e: Exception) {
+            log("HEX ERROR: ${e.message ?: e.javaClass.simpleName}")
         }
     }
 
-    private fun log(s: String) { logView.append(s + "\n") }
+    private fun closeUsb() {
+        try { claimedInterface?.let { connection?.releaseInterface(it) } } catch (_: Exception) {}
+        try { connection?.close() } catch (_: Exception) {}
+        claimedInterface = null
+        connection = null
+    }
+
+    private fun log(message: String) {
+        logView.append(message + "\n")
+    }
+
+    private fun hex2(v: Int) = String.format(Locale.US, "0x%02X", v and 0xFF)
+    private fun hex4(v: Int) = String.format(Locale.US, "%04X", v and 0xFFFF)
 
     override fun onDestroy() {
         try { unregisterReceiver(permissionReceiver) } catch (_: Exception) {}
-        bulkInterface?.let { connection?.releaseInterface(it) }
-        connection?.close()
+        closeUsb()
         super.onDestroy()
     }
 
     companion object {
-        const val NUVOTON_VID = 0x0416
-        const val NUVOTON_PID = 0x511C
-        const val BULK_INTERFACE_NUMBER = 1
-        const val BULK_IN_ADDRESS = 0x83
-        const val BULK_OUT_ADDRESS = 0x04
-        const val REQUEST_HEX = 1001
+        private const val NUVOTON_VID = 0x0416
+        private const val NUVOTON_PID = 0x511C
+        private const val BULK_INTERFACE_NUMBER = 1
+        private const val BULK_IN_ADDRESS = 0x83
+        private const val BULK_OUT_ADDRESS = 0x04
+        private const val REQUEST_HEX = 1001
     }
 }
 
-data class HexSummary(val size: Int, val records: Int, val minAddress: Long, val maxAddress: Long)
+data class HexSummary(val bytes: Int, val records: Int, val minAddress: Long, val maxAddress: Long)
 
 object IntelHex {
     fun parse(text: String): HexSummary {
         var upper = 0L
         var count = 0
+        var records = 0
         var min = Long.MAX_VALUE
         var max = 0L
         var eof = false
         text.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.forEach { line ->
             require(line.startsWith(":")) { "Invalid Intel HEX record" }
-            val b = line.substring(1).chunked(2).map { it.toInt(16) }
+            val raw = line.substring(1)
+            require(raw.length % 2 == 0) { "Odd number of HEX characters" }
+            val b = raw.chunked(2).map { it.toInt(16) }
             require(b.size >= 5) { "Record too short" }
             val len = b[0]
             require(b.size == len + 5) { "Record length mismatch" }
             require((b.sum() and 0xFF) == 0) { "Checksum error" }
             val addr = (b[1] shl 8) or b[2]
             when (b[3]) {
-                0x00 -> {
-                    if (len > 0) {
-                        val absolute = upper + addr
-                        min = minOf(min, absolute.toLong())
-                        max = maxOf(max, absolute.toLong() + len - 1)
-                        count += len
-                    }
+                0x00 -> if (len > 0) {
+                    val absolute = upper + addr
+                    min = minOf(min, absolute)
+                    max = maxOf(max, absolute + len - 1)
+                    count += len
+                    records++
                 }
                 0x01 -> eof = true
-                0x02 -> upper = ((b[4] shl 8) or b[5]).toLong() shl 4
-                0x04 -> upper = (((b[4] shl 8) or b[5]).toLong() shl 16)
+                0x02 -> {
+                    require(len == 2) { "Invalid extended segment address record" }
+                    upper = (((b[4] shl 8) or b[5]).toLong() shl 4)
+                }
+                0x04 -> {
+                    require(len == 2) { "Invalid extended linear address record" }
+                    upper = (((b[4] shl 8) or b[5]).toLong() shl 16)
+                }
                 0x03, 0x05 -> Unit
                 else -> error("Unsupported Intel HEX record type ${b[3]}")
             }
         }
         require(eof) { "Missing EOF record" }
         require(count > 0) { "HEX contains no data records" }
-        return HexSummary(count, text.lineSequence().count { it.trim().startsWith(":") && it.trim().getOrNull(7) == '0' },
-            min, max)
+        return HexSummary(count, records, min, max)
     }
 }
