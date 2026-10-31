@@ -1,41 +1,23 @@
-# Nu-Link Android — Milestone 4: Captured Auto Detect test (upload refresh)
+# Nu-Link Android — Milestone 6: Full response diagnostics (v0.6)
 
-This project builds a debug APK through GitHub Actions.
+This Android project builds a debug APK through GitHub Actions.
 
 ## What this build does
-- Detects the user's Nu-Link clone (`VID 0416`, `PID 511C`).
-- Requests Android USB permission and claims interface 1.
-- Verifies bulk IN `0x83` and OUT `0x04`.
-- Adds an **AUTO DETECT MCU (MS51PC0AE)** action.
-- Replays the 435 OUT bulk frames extracted from the user's Windows capture `NuLink_MS51PC0AE_Detect_Only.pcapng`.
-- Reads one 64-byte IN response for each OUT transaction and compares it with the matching response in that capture.
-- Reports `MS51PC0AE — capture reference matched` only if every response exactly matches the captured Windows reference. Otherwise it reports that the MCU is not confirmed.
+- Detects the Nu-Link clone (VID 0416, PID 511C), claims interface 1, and uses bulk IN 0x83 / OUT 0x04.
+- Replays the same 435 captured MS51PC0AE Auto Detect request frames used in v0.5. No new protocol commands are added.
+- Compares each live 64-byte response against the matching response from the user's known-good Windows capture.
+- Reports every mismatching transaction, including its 64-byte OUT request, expected IN response, actual IN response, differing byte offsets, and expected/actual byte values.
+- Reports total differing response bytes and elapsed time.
+- Provides a button to copy the complete diagnostic report to the Android clipboard.
+- Continues to require an exact full-sequence match before displaying the reference-match result.
 
-## Important limitation
-This is a controlled, capture-derived Auto Detect replay for the MS51PC0AE test case. It is not yet a general implementation of the Nu-Link protocol and does not support MS51FB9AE detection in this build. The packet sequence was extracted from the capture that the user confirmed was made in Auto Detection mode only. It does not include erase, flash write, configuration-bit, or lock-bit operations. Do not use this APK as a production programmer.
+## Safety / limitations
+This is a capture-derived diagnostic replay for the MS51PC0AE test case, not a general Nu-Link protocol implementation. It does not implement erase, flash programming, configuration-bit, or lock-bit operations. Do not use it as a production programmer. A full reference match means the exchange matches the supplied capture; it is not independent silicon authentication.
 
-Exact matching is intentionally strict. Firmware/response variations may cause a false negative; in that case the app reports "MCU not confirmed" rather than guessing.
-
-## Build with GitHub Actions
-1. Upload the full extracted project to the GitHub repository, including `.github/workflows/android.yml`.
-2. Open **Actions** and run the workflow.
-3. Download `NuLink-Android-debug-APK` from the workflow artifacts.
-4. Extract and install `app-debug.apk`.
-
-## Protocol evidence
-The embedded binary assets contain 435 paired 64-byte bulk OUT/IN frames from the supplied MS51PC0AE detect-only capture. The final OUT record was excluded because no corresponding IN response was present in the capture.
-
-
-## Re-upload note (version 0.4)
-This refresh increments the Android version to 0.4 (versionCode 4) so GitHub will recognize a real source change when these files replace the older project. Upload the CONTENTS of this folder into the repository root, not the outer folder. Ensure the hidden `.github` directory is included. Commit the changes before running Actions.
-
-
-## Milestone 5 — Auto-detection diagnostics (v0.5)
-
-This build runs the bundled captured MS51PC0AE detection exchange and reports:
-- number of request/response transactions;
-- exact response and sequence-byte match counts;
-- first 25 mismatching transaction numbers;
-- first mismatch USB OUT request, expected IN response, actual IN response, differing byte offsets and expected/actual byte values.
-
-A short/timeout response reports its transaction number and received length. The app does not implement erase, flash programming, configuration-bit, or lock-bit commands. A full response match is a capture-reference match, not independent proof of chip identity.
+## Build APK with GitHub Actions
+1. Extract this ZIP.
+2. In the existing repository, choose **Add file → Upload files**.
+3. Upload the CONTENTS of this folder to the repository root, including the hidden `.github` folder.
+4. Commit the changes (versionCode 6 / versionName 0.6 are changed).
+5. Open **Actions** and run **Build Nu-Link Android APK**.
+6. Download the `NuLink-Android-debug-APK` artifact and extract `app-debug.apk`.

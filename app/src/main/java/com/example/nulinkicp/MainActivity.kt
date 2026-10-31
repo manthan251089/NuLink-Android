@@ -22,6 +22,7 @@ class MainActivity : Activity() {
     private var bulkOutEndpoint: UsbEndpoint? = null
     @Volatile private var detectRunning = false
     private lateinit var detectButton: Button
+    private var lastDiagnosticReport: String = ""
     private val permissionAction = "com.example.nulinkicp.USB_PERMISSION"
 
     private val permissionReceiver = object : BroadcastReceiver() {
@@ -90,6 +91,18 @@ class MainActivity : Activity() {
             setOnClickListener { runCapturedAutoDetect() }
         }
         root.addView(detectButton)
+        root.addView(Button(this).apply {
+            text = "COPY FULL DIAGNOSTIC REPORT"
+            setOnClickListener {
+                if (lastDiagnosticReport.isBlank()) {
+                    Toast.makeText(this@MainActivity, "Run AUTO DETECT first.", Toast.LENGTH_SHORT).show()
+                } else {
+                    val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    clipboard.setPrimaryClip(ClipData.newPlainText("Nu-Link diagnostic report", lastDiagnosticReport))
+                    Toast.makeText(this@MainActivity, "Diagnostic report copied.", Toast.LENGTH_SHORT).show()
+                }
+            }
+        })
         root.addView(Button(this).apply {
             text = "ONLINE PROGRAM (not enabled)"
             isEnabled = false
@@ -238,11 +251,9 @@ class MainActivity : Activity() {
                 var exactMatches = 0
                 var sequenceMatches = 0
                 val mismatchTransactions = ArrayList<Int>()
-                var firstMismatchExpected: ByteArray? = null
-                var firstMismatchActual: ByteArray? = null
-                var firstMismatchRequest: ByteArray? = null
-                var firstMismatchDiffs: List<Int> = emptyList()
-                var firstMismatchRxLength = -1
+                val mismatchDetails = ArrayList<String>()
+                var totalDifferingBytes = 0
+                val startedAt = System.currentTimeMillis()
                 for (i in 0 until txCount) {
                     val tx = txBytes.copyOfRange(i * 64, (i + 1) * 64)
                     val expected = refBytes.copyOfRange(i * 64, (i + 1) * 64)
@@ -255,38 +266,51 @@ class MainActivity : Activity() {
                     if (rx.contentEquals(expected)) {
                         exactMatches++
                     } else {
+                        val diffs = (0 until 64).filter { rx[it] != expected[it] }
                         mismatchTransactions.add(i + 1)
-                        if (firstMismatchExpected == null) {
-                            firstMismatchExpected = expected.copyOf()
-                            firstMismatchActual = rx.copyOf()
-                            firstMismatchRequest = tx.copyOf()
-                            firstMismatchDiffs = (0 until 64).filter { rx[it] != expected[it] }
-                            firstMismatchRxLength = received
+                        totalDifferingBytes += diffs.size
+                        val detail = buildString {
+                            appendLine("--- MISMATCH TRANSACTION ${i + 1} ---")
+                            appendLine("OUT request: ${formatBytes(tx)}")
+                            appendLine("Expected IN: ${formatBytes(expected)}")
+                            appendLine("Actual IN:   ${formatBytes(rx)}")
+                            appendLine("Differing offsets: ${diffs.joinToString(", ").ifEmpty { "none" }}")
+                            appendLine("Byte differences: ${diffs.joinToString("; ") { offset ->
+                                "%02d: expected=%02X actual=%02X".format(Locale.US, offset,
+                                    expected[offset].toInt() and 0xFF, rx[offset].toInt() and 0xFF)
+                            }}")
                         }
+                        mismatchDetails.add(detail)
                     }
                     if (i % 25 == 0 || i == txCount - 1) {
                         val done = i + 1
                         runOnUiThread { statusView.text = "Auto Detect: $done / $txCount transactions" }
                     }
                 }
+                val elapsedMs = System.currentTimeMillis() - startedAt
+                val fullReport = buildString {
+                    appendLine("NU-LINK MS51PC0AE CAPTURE COMPARISON — DIAGNOSTIC v0.6")
+                    appendLine("Requests sent: $txCount")
+                    appendLine("Exact response matches: $exactMatches / $txCount")
+                    appendLine("Sequence-byte matches: $sequenceMatches / $txCount")
+                    appendLine("Mismatching transactions: ${mismatchTransactions.size}")
+                    appendLine("Total differing response bytes: $totalDifferingBytes")
+                    appendLine("Elapsed: ${elapsedMs} ms")
+                    appendLine("Mismatch transaction numbers: ${mismatchTransactions.joinToString(", ").ifEmpty { "none" }}")
+                    appendLine()
+                    mismatchDetails.forEach { appendLine(it) }
+                    appendLine("No erase, flash-program, configuration-bit, or lock-bit command is implemented.")
+                }
                 runOnUiThread {
-                    log("AUTO DETECT DIAGNOSTICS: requests=$txCount, exact=$exactMatches, sequence-byte=$sequenceMatches.")
-                    log("Mismatching transaction count: ${mismatchTransactions.size}.")
-                    log("First 25 mismatching transaction numbers: ${mismatchTransactions.take(25).joinToString(", ").ifEmpty { "none" }}")
-                    val mismatchExpected = firstMismatchExpected
-                    val mismatchActual = firstMismatchActual
-                    val mismatchRequest = firstMismatchRequest
-                    if (mismatchExpected != null && mismatchActual != null && mismatchRequest != null) {
-                        log("--- FIRST RESPONSE MISMATCH: transaction ${mismatchTransactions.first()} ---")
-                        log("USB OUT request (64 bytes): ${formatBytes(mismatchRequest)}")
-                        log("Expected IN (${mismatchExpected.size} bytes): ${formatBytes(mismatchExpected)}")
-                        log("Actual IN ($firstMismatchRxLength bytes): ${formatBytes(mismatchActual)}")
-                        log("Different byte offsets (decimal): ${firstMismatchDiffs.joinToString(", ")}")
-                        log("Different byte values: ${firstMismatchDiffs.joinToString("; ") { offset ->
-                            "%02d: expected=%02X actual=%02X".format(Locale.US, offset,
-                                mismatchExpected[offset].toInt() and 0xFF,
-                                mismatchActual[offset].toInt() and 0xFF)
-                        }}")
+                    lastDiagnosticReport = fullReport
+                    log("AUTO DETECT DIAGNOSTICS v0.6: requests=$txCount, exact=$exactMatches, sequence-byte=$sequenceMatches.")
+                    log("Mismatching transactions (${mismatchTransactions.size}): ${mismatchTransactions.joinToString(", ").ifEmpty { "none" }}")
+                    log("Total differing response bytes: $totalDifferingBytes; elapsed=${elapsedMs}ms.")
+                    if (mismatchDetails.isEmpty()) {
+                        log("All live responses exactly match the reference capture.")
+                    } else {
+                        log("Full request/expected/actual response and byte-difference detail follows:")
+                        mismatchDetails.forEach { detail -> detail.lineSequence().forEach { line -> log(line) } }
                     }
                     if (exactMatches == txCount) {
                         mcuView.text = "MCU: MS51PC0AE — capture reference matched"
