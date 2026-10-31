@@ -200,8 +200,8 @@ class MainActivity : Activity() {
         mcuView.text = "MCU: not identified — no ICP command sent"
         log("USB interface 1 successfully claimed.")
         log("Bulk IN=${hex2(input.address)}, OUT=${hex2(output.address)}, maxPacket=${input.maxPacketSize}.")
-        log("Transport check only. No USB OUT command has been transmitted.")
-        log("MCU identification is intentionally not enabled until command framing is validated.")
+        log("USB transport ready. No detection command has been sent yet.")
+        log("Tap AUTO DETECT MCU to run the captured MS51PC0AE identification sequence.")
     }
 
 
@@ -237,36 +237,67 @@ class MainActivity : Activity() {
                 }
                 var exactMatches = 0
                 var sequenceMatches = 0
-                var firstMismatch = -1
+                val mismatchTransactions = ArrayList<Int>()
+                var firstMismatchExpected: ByteArray? = null
+                var firstMismatchActual: ByteArray? = null
+                var firstMismatchRequest: ByteArray? = null
+                var firstMismatchDiffs: List<Int> = emptyList()
+                var firstMismatchRxLength = -1
                 for (i in 0 until txCount) {
                     val tx = txBytes.copyOfRange(i * 64, (i + 1) * 64)
                     val expected = refBytes.copyOfRange(i * 64, (i + 1) * 64)
                     val sent = conn.bulkTransfer(epOut, tx, 64, 2000)
-                    if (sent != 64) error("USB OUT failed at transaction ${i + 1}: $sent bytes")
+                    if (sent != 64) error("USB OUT failed at transaction ${i + 1}: sent=$sent/64 bytes")
                     val rx = ByteArray(64)
                     val received = conn.bulkTransfer(epIn, rx, 64, 2500)
-                    if (received != 64) error("USB IN timeout/short response at transaction ${i + 1}: $received bytes")
+                    if (received != 64) error("USB IN timeout/short response at transaction ${i + 1}: received=$received/64 bytes")
                     if (rx[0] == expected[0]) sequenceMatches++
-                    if (rx.contentEquals(expected)) exactMatches++
-                    else if (firstMismatch < 0) firstMismatch = i
+                    if (rx.contentEquals(expected)) {
+                        exactMatches++
+                    } else {
+                        mismatchTransactions.add(i + 1)
+                        if (firstMismatchExpected == null) {
+                            firstMismatchExpected = expected.copyOf()
+                            firstMismatchActual = rx.copyOf()
+                            firstMismatchRequest = tx.copyOf()
+                            firstMismatchDiffs = (0 until 64).filter { rx[it] != expected[it] }
+                            firstMismatchRxLength = received
+                        }
+                    }
                     if (i % 25 == 0 || i == txCount - 1) {
                         val done = i + 1
                         runOnUiThread { statusView.text = "Auto Detect: $done / $txCount transactions" }
                     }
                 }
                 runOnUiThread {
+                    log("AUTO DETECT DIAGNOSTICS: requests=$txCount, exact=$exactMatches, sequence-byte=$sequenceMatches.")
+                    log("Mismatching transaction count: ${mismatchTransactions.size}.")
+                    log("First 25 mismatching transaction numbers: ${mismatchTransactions.take(25).joinToString(", ").ifEmpty { "none" }}")
+                    val mismatchExpected = firstMismatchExpected
+                    val mismatchActual = firstMismatchActual
+                    val mismatchRequest = firstMismatchRequest
+                    if (mismatchExpected != null && mismatchActual != null && mismatchRequest != null) {
+                        log("--- FIRST RESPONSE MISMATCH: transaction ${mismatchTransactions.first()} ---")
+                        log("USB OUT request (64 bytes): ${formatBytes(mismatchRequest)}")
+                        log("Expected IN (${mismatchExpected.size} bytes): ${formatBytes(mismatchExpected)}")
+                        log("Actual IN ($firstMismatchRxLength bytes): ${formatBytes(mismatchActual)}")
+                        log("Different byte offsets (decimal): ${firstMismatchDiffs.joinToString(", ")}")
+                        log("Different byte values: ${firstMismatchDiffs.joinToString("; ") { offset ->
+                            "%02d: expected=%02X actual=%02X".format(Locale.US, offset,
+                                mismatchExpected[offset].toInt() and 0xFF,
+                                mismatchActual[offset].toInt() and 0xFF)
+                        }}")
+                    }
                     if (exactMatches == txCount) {
                         mcuView.text = "MCU: MS51PC0AE — capture reference matched"
                         statusView.text = "Auto Detect exchange completed"
-                        log("AUTO DETECT: all $txCount responses exactly match the Windows MS51PC0AE reference.")
-                        log("Result: MS51PC0AE (capture-reference match).")
+                        log("Result: MS51PC0AE (all captured responses matched exactly).")
                     } else {
                         mcuView.text = "MCU: not confirmed"
                         statusView.text = "Auto Detect completed; response differs"
-                        log("AUTO DETECT: $exactMatches / $txCount exact response matches; $sequenceMatches sequence-byte matches.")
-                        log("First differing response: transaction ${firstMismatch + 1}.")
-                        log("MCU was NOT identified because the response did not fully match the MS51PC0AE reference.")
+                        log("MCU was NOT identified: live responses differ from the MS51PC0AE reference.")
                     }
+                    log("No erase, flash-program, configuration-bit, or lock-bit command is implemented.")
                 }
             } catch (e: Exception) {
                 runOnUiThread {
@@ -324,6 +355,10 @@ class MainActivity : Activity() {
 
     private fun log(message: String) {
         logView.append(message + "\n")
+    }
+
+    private fun formatBytes(bytes: ByteArray): String = bytes.joinToString(" ") {
+        "%02X".format(Locale.US, it.toInt() and 0xFF)
     }
 
     private fun hex2(v: Int) = String.format(Locale.US, "0x%02X", v and 0xFF)

@@ -28,3 +28,14 @@ The embedded binary assets contain 435 paired 64-byte bulk OUT/IN frames from th
 
 ## Re-upload note (version 0.4)
 This refresh increments the Android version to 0.4 (versionCode 4) so GitHub will recognize a real source change when these files replace the older project. Upload the CONTENTS of this folder into the repository root, not the outer folder. Ensure the hidden `.github` directory is included. Commit the changes before running Actions.
+
+
+## Milestone 5 — Auto-detection diagnostics (v0.5)
+
+This build runs the bundled captured MS51PC0AE detection exchange and reports:
+- number of request/response transactions;
+- exact response and sequence-byte match counts;
+- first 25 mismatching transaction numbers;
+- first mismatch USB OUT request, expected IN response, actual IN response, differing byte offsets and expected/actual byte values.
+
+A short/timeout response reports its transaction number and received length. The app does not implement erase, flash programming, configuration-bit, or lock-bit commands. A full response match is a capture-reference match, not independent proof of chip identity.
