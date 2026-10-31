@@ -1,4 +1,4 @@
-# Nu-Link Android — Milestone 3: Captured Auto Detect test
+# Nu-Link Android — Milestone 4: Captured Auto Detect test (upload refresh)
 
 This project builds a debug APK through GitHub Actions.
 
@@ -24,3 +24,7 @@ Exact matching is intentionally strict. Firmware/response variations may cause a
 
 ## Protocol evidence
 The embedded binary assets contain 435 paired 64-byte bulk OUT/IN frames from the supplied MS51PC0AE detect-only capture. The final OUT record was excluded because no corresponding IN response was present in the capture.
+
+
+## Re-upload note (version 0.4)
+This refresh increments the Android version to 0.4 (versionCode 4) so GitHub will recognize a real source change when these files replace the older project. Upload the CONTENTS of this folder into the repository root, not the outer folder. Ensure the hidden `.github` directory is included. Commit the changes before running Actions.

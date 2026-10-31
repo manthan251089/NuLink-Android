@@ -1,0 +1,14 @@
+NU-LINK ANDROID — UPLOAD THIS PROJECT
+
+1. Extract this ZIP on Windows.
+2. Open the extracted NuLinkAndroid_Milestone4_Refresh folder.
+3. Open your GitHub repository in a browser.
+4. Choose Add file > Upload files.
+5. Select and upload the CONTENTS of this folder into the repository root. Do not upload this outer folder as a nested folder.
+6. Make sure the hidden .github folder is included. In File Explorer, enable View > Show > Hidden items if needed.
+7. Wait for the upload to finish. You should see changed files, including app/build.gradle.kts and README.md.
+8. Enter commit message: Update Nu-Link Android to v0.4, then click Commit changes.
+9. Open Actions > Build Nu-Link Android APK and run the workflow (or wait for push build).
+10. Download artifact NuLink-Android-debug-APK after the workflow succeeds.
+
+This build is for captured MS51PC0AE auto-detection research only. It does not implement HEX erase/program/verify.

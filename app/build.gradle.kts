@@ -11,8 +11,8 @@ android {
         applicationId = "com.example.nulinkicp"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.3-captured-autodetect"
+        versionCode = 4
+        versionName = "0.4-captured-autodetect"
     }
 
     // Keep Java and Kotlin bytecode targets aligned.
