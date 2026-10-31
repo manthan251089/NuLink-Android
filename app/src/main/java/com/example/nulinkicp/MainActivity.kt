@@ -36,7 +36,13 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         usbManager = getSystemService(USB_SERVICE) as UsbManager
         buildUi()
-        registerReceiver(permissionReceiver, IntentFilter(permissionAction), RECEIVER_NOT_EXPORTED)
+        val permissionFilter = IntentFilter(permissionAction)
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(permissionReceiver, permissionFilter, RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("DEPRECATION")
+            registerReceiver(permissionReceiver, permissionFilter)
+        }
         findNuLink()
     }
 
@@ -76,8 +82,23 @@ class MainActivity : Activity() {
         }
         log("Found ${device.deviceName}, VID=${device.vendorId.toString(16)}, PID=${device.productId.toString(16)}")
         if (usbManager.hasPermission(device)) inspectAndOpen(device) else {
-            val pi = PendingIntent.getBroadcast(this, 0, Intent(permissionAction), PendingIntent.FLAG_MUTABLE)
-            usbManager.requestPermission(device, pi)
+            // Android 14+ rejects a mutable PendingIntent with an implicit Intent.
+            // Scope the broadcast to this app package so USB permission can be delivered.
+            val permissionIntent = Intent(permissionAction).setPackage(packageName)
+            val pi = PendingIntent.getBroadcast(
+                this,
+                0,
+                permissionIntent,
+                PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+            try {
+                usbManager.requestPermission(device, pi)
+                statusView.text = "USB: waiting for permission"
+                log("Requested Android USB permission.")
+            } catch (e: Exception) {
+                statusView.text = "USB: permission request failed"
+                log("USB permission error: ${e.javaClass.simpleName}: ${e.message}")
+            }
         }
     }
 
